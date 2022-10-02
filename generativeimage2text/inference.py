@@ -15,6 +15,7 @@ from transformers import BertTokenizer
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 from PIL import Image
 from azfuse import File
+import csv
 
 from .common import init_logging
 from .common import parse_general_args
@@ -22,9 +23,10 @@ from .tsv_io import load_from_yaml_file
 from .torch_common import torch_load
 from .torch_common import load_state_dict
 from .process_image import load_image_by_pil
-from .model import get_git_model
+from .model import get_git_model, get_extraction_model
 
-
+from .msgit_embeddings_serialize import MSGit_Embedding, serialize, deserialize
+import numpy as np
 
 class MinMaxResizeForTest(object):
     def __init__(self, min_size, max_size):
@@ -63,6 +65,101 @@ class MinMaxResizeForTest(object):
         image = F.resize(img, size, interpolation=PIL.Image.BICUBIC)
         return image
 
+def extract_embedding_image_caption_csv(model_name, csv_path):
+    param = {}
+    if File.isfile(f'aux_data/models/{model_name}/parameter.yaml'):
+        param = load_from_yaml_file(f'aux_data/models/{model_name}/parameter.yaml')
+
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
+
+    outfile_name = csv_path.split("/")[-1]
+    outfile_name = ".".join(outfile_name.split(".")[0:-1])
+    outfile_name += ".ge"
+
+    # model
+    model = get_extraction_model(tokenizer, param)
+    pretrained = f'output/{model_name}/snapshot/model.pt'
+    checkpoint = torch_load(pretrained)['model']
+    load_state_dict(model, checkpoint)
+    model.cuda()
+    model.eval()
+
+    transforms = get_image_transform(param)
+    max_text_len = 60
+
+    with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter=',', quotechar='"')
+        header = next(reader)
+        input_rows = [row for row in reader]
+
+    image_col = -1
+    caption_col = -1
+    rating_col = -1
+    num_ratings_col = -1
+    ratings_col = -1
+
+    for col, heading in enumerate(header):
+        if heading == 'image':
+            image_col = col
+        elif heading == 'caption':
+            caption_col = col
+        elif heading == 'rating':
+            rating_col = col
+        elif heading == 'num_ratings':
+            num_ratings_col = col
+        elif heading == 'ratings':
+            ratings_col = col
+        elif heading != '':
+            print(f"WARNING: Unknown column '{heading}' in input csv file will be ignored.")
+
+    result_list = []
+    for i, row in enumerate(input_rows):
+        imagename = row[image_col]
+        caption = row[caption_col]
+
+        img = [load_image_by_pil(imagename)]
+        img = [transforms(i) for i in img]
+        img = [i.unsqueeze(0).cuda() for i in img]
+
+        # prefix
+        prefix_encoding = tokenizer(caption,
+                                padding='max_length',
+                                truncation=True,
+                                add_special_tokens=False,
+                                max_length=max_text_len)
+
+        payload = prefix_encoding['input_ids']
+        if len(payload) > max_text_len - 2:
+            payload = payload[-(max_text_len - 2):]
+        input_ids = [tokenizer.cls_token_id] + payload
+
+        with torch.no_grad():
+            history_5 = model({
+                'image': img,
+                'prefix': torch.tensor(input_ids).unsqueeze(0).cuda(),
+            })
+
+        embedding = np.array(history_5.detach().squeeze().cpu())
+
+        ratings = []
+        if rating_col != -1:
+            ratings = [float(row[rating_col])]
+        elif ratings_col != -1:
+            if num_ratings_col != -1:
+                num_ratings = int(row[num_ratings_col])
+                ratings = list(map(float, row[ratings_col:ratings_col + num_ratings]))
+            else:
+                ratings = list(map(float, row[ratings_col:]))
+		
+        msgit_embedding = MSGit_Embedding(imagename, caption, embedding, ratings)
+        result_list.append(msgit_embedding)
+
+        # save this to look at out of curiosity
+        # cap = tokenizer.decode(result['predictions'][0].tolist(), skip_special_tokens=True)
+        # logging.info('output: {}'.format(cap))
+    with open('embeddings/' + outfile_name, 'wb') as f:
+        serialize(result_list, f)
+
 
 def test_git_inference_single_image(image_path, model_name, prefix):
     param = {}
@@ -89,9 +186,10 @@ def test_git_inference_single_image(image_path, model_name, prefix):
     img = [i.unsqueeze(0).cuda() for i in img]
 
     # prefix
-    max_text_len = 40
+    max_text_len = 60
     prefix_encoding = tokenizer(prefix,
-                                padding='do_not_pad',
+                                # padding='do_not_pad',
+                                padding='max_length',
                                 truncation=True,
                                 add_special_tokens=False,
                                 max_length=max_text_len)
