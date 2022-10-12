@@ -790,6 +790,7 @@ class ExtractionModel(nn.Module):
         use_history_for_infer=False,
         pooling_images=None,
         num_image_with_embedding=0,
+	extract_layer=0,
     ):
         super().__init__()
         self.image_encoder = visual
@@ -802,6 +803,8 @@ class ExtractionModel(nn.Module):
         self.decoder = decoder
         self.scst = scst
         self.tokenizer = tokenizer
+
+        self.extract_layer = extract_layer 
 
         if self.scst:
             raise NotImplementedError
@@ -1017,7 +1020,7 @@ class ExtractionModel(nn.Module):
             return output_dict
         else:
             ret = self.decoding_step(visual_features, visual_features_valid, None, start_predictions, True)
-            return ret['history'][5]
+            return ret['history'][self.extract_layer]
 
     def decoding_step(
         self, visual_features, visual_features_valid, bi_valid_mask_caption, partial_captions, return_dict=False

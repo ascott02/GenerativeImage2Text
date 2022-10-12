@@ -52,7 +52,7 @@ def get_git_model(tokenizer, param):
     )
     return model
 
-def get_extraction_model(tokenizer, param):
+def get_extraction_model(tokenizer, param, extract_layer=0):
     image_encoder = get_image_encoder(
         param.get('image_encoder_type', 'CLIPViT_B_16'),
         input_resolution=param.get('test_crop_size', 224),
@@ -94,7 +94,8 @@ def get_extraction_model(tokenizer, param):
         tokenizer=tokenizer,
         use_history_for_infer=True,
         loss_type='smooth',
-        num_image_with_embedding=param.get('num_image_with_embedding')
+        num_image_with_embedding=param.get('num_image_with_embedding'),
+	extract_layer=extract_layer,
     )
     return model
 

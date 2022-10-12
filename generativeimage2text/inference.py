@@ -65,7 +65,7 @@ class MinMaxResizeForTest(object):
         image = F.resize(img, size, interpolation=PIL.Image.BICUBIC)
         return image
 
-def extract_embedding_image_caption_csv(model_name, csv_path):
+def extract_embedding_image_caption_csv(model_name, csv_path, extract_layer):
     param = {}
     if File.isfile(f'aux_data/models/{model_name}/parameter.yaml'):
         param = load_from_yaml_file(f'aux_data/models/{model_name}/parameter.yaml')
@@ -74,10 +74,10 @@ def extract_embedding_image_caption_csv(model_name, csv_path):
 
     outfile_name = csv_path.split("/")[-1]
     outfile_name = ".".join(outfile_name.split(".")[0:-1])
-    outfile_name += ".ge"
+    outfile_name += "-layer" + str(extract_layer) + ".ge"
 
     # model
-    model = get_extraction_model(tokenizer, param)
+    model = get_extraction_model(tokenizer, param, extract_layer)
     pretrained = f'output/{model_name}/snapshot/model.pt'
     checkpoint = torch_load(pretrained)['model']
     load_state_dict(model, checkpoint)
@@ -134,12 +134,12 @@ def extract_embedding_image_caption_csv(model_name, csv_path):
         input_ids = [tokenizer.cls_token_id] + payload
 
         with torch.no_grad():
-            history_5 = model({
+            extracted_layer = model({
                 'image': img,
                 'prefix': torch.tensor(input_ids).unsqueeze(0).cuda(),
             })
 
-        embedding = np.array(history_5.detach().squeeze().cpu())
+        embedding = np.array(extracted_layer.detach().squeeze().cpu())
 
         ratings = []
         if rating_col != -1:
